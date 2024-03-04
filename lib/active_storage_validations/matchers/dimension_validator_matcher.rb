@@ -1,5 +1,12 @@
 # frozen_string_literal: true
 
+require_relative 'concerns/active_storageable.rb'
+require_relative 'concerns/allow_blankable.rb'
+require_relative 'concerns/contextable.rb'
+require_relative 'concerns/messageable.rb'
+require_relative 'concerns/rspecable.rb'
+require_relative 'concerns/validatable.rb'
+
 module ActiveStorageValidations
   module Matchers
     def validate_dimensions_of(name)
@@ -7,14 +14,35 @@ module ActiveStorageValidations
     end
 
     class DimensionValidatorMatcher
+      include ActiveStorageable
+      include AllowBlankable
+      include Contextable
+      include Messageable
+      include Rspecable
+      include Validatable
+
       def initialize(attribute_name)
+        initialize_allow_blankable
+        initialize_contextable
+        initialize_messageable
+        initialize_rspecable
         @attribute_name = attribute_name
         @width_min = @width_max = @height_min = @height_max = nil
-        @custom_message = nil
       end
 
       def description
-        "validate image dimensions of #{@attribute_name}"
+        "validate the image dimensions of :#{@attribute_name}"
+      end
+
+      def failure_message
+        message = ["is expected to validate dimensions of :#{@attribute_name}"]
+        build_failure_message(message)
+        message.join("\n")
+      end
+
+      def width(width)
+        @width_min = @width_max = width
+        self
       end
 
       def width_min(width)
@@ -27,13 +55,13 @@ module ActiveStorageValidations
         self
       end
 
-      def with_message(message)
-        @custom_message = message
+      def width_between(range)
+        @width_min, @width_max = range.first, range.last
         self
       end
 
-      def width(width)
-        @width_min = @width_max = width
+      def height(height)
+        @height_min = @height_max = height
         self
       end
 
@@ -47,42 +75,40 @@ module ActiveStorageValidations
         self
       end
 
-      def width_between(range)
-        @width_min, @width_max = range.first, range.last
-        self
-      end
-
       def height_between(range)
         @height_min, @height_max = range.first, range.last
         self
       end
 
-      def height(height)
-        @height_min = @height_max = height
-        self
-      end
-
       def matches?(subject)
         @subject = subject.is_a?(Class) ? subject.new : subject
-        responds_to_methods &&
-          width_not_smaller_than_min? && width_larger_than_min? && width_smaller_than_max? && width_not_larger_than_max? && width_equals? &&
-          height_not_smaller_than_min? && height_larger_than_min? && height_smaller_than_max? && height_not_larger_than_max? && height_equals?
-      end
 
-      def failure_message
-        <<~MESSAGE
-          is expected to validate dimensions of #{@attribute_name}
-            width between #{@width_min} and #{@width_max}
-            height between #{@height_min} and #{@height_max}
-        MESSAGE
+        is_a_valid_active_storage_attribute? &&
+          is_context_valid? &&
+          is_allowing_blank? &&
+          is_custom_message_valid? &&
+          width_not_smaller_than_min? &&
+          width_larger_than_min? &&
+          width_smaller_than_max? &&
+          width_not_larger_than_max? &&
+          width_equals? &&
+          height_not_smaller_than_min? &&
+          height_larger_than_min? &&
+          height_smaller_than_max? &&
+          height_not_larger_than_max? &&
+          height_equals?
       end
 
       protected
 
-      def responds_to_methods
-        @subject.respond_to?(@attribute_name) &&
-          @subject.public_send(@attribute_name).respond_to?(:attach) &&
-          @subject.public_send(@attribute_name).respond_to?(:detach)
+      def build_failure_message(message)
+        return unless @failure_message_artefacts.present?
+
+        message << "  but there seem to have issues with the matcher methods you used, since:"
+        @failure_message_artefacts.each do |error_case|
+          message << "  validation failed when provided with a #{error_case[:width]}x#{error_case[:height]}px test image"
+        end
+        message << "  whereas it should have passed"
       end
 
       def valid_width
@@ -94,62 +120,83 @@ module ActiveStorageValidations
       end
 
       def width_not_smaller_than_min?
-        @width_min.nil? || !passes_validation_with_dimensions(@width_min - 1, valid_height, 'width')
+        @width_min.nil? || !passes_validation_with_dimensions(@width_min - 1, valid_height)
       end
 
       def width_larger_than_min?
-        @width_min.nil? || @width_min == @width_max || passes_validation_with_dimensions(@width_min + 1, valid_height, 'width')
+        @width_min.nil? || @width_min == @width_max || passes_validation_with_dimensions(@width_min + 1, valid_height)
       end
 
       def width_smaller_than_max?
-        @width_max.nil? || @width_min == @width_max || passes_validation_with_dimensions(@width_max - 1, valid_height, 'width')
+        @width_max.nil? || @width_min == @width_max || passes_validation_with_dimensions(@width_max - 1, valid_height)
       end
 
       def width_not_larger_than_max?
-        @width_max.nil? || !passes_validation_with_dimensions(@width_max + 1, valid_height, 'width')
+        @width_max.nil? || !passes_validation_with_dimensions(@width_max + 1, valid_height)
       end
 
       def width_equals?
-        @width_min.nil? || @width_min != @width_max || passes_validation_with_dimensions(@width_min, valid_height, 'width')
+        @width_min.nil? || @width_min != @width_max || passes_validation_with_dimensions(@width_min, valid_height)
       end
 
       def height_not_smaller_than_min?
-        @height_min.nil? || !passes_validation_with_dimensions(valid_width, @height_min - 1, 'height')
+        @height_min.nil? || !passes_validation_with_dimensions(valid_width, @height_min - 1)
       end
 
       def height_larger_than_min?
-        @height_min.nil? || @height_min == @height_max || passes_validation_with_dimensions(valid_width, @height_min + 1, 'height')
+        @height_min.nil? || @height_min == @height_max || passes_validation_with_dimensions(valid_width, @height_min + 1)
       end
 
       def height_smaller_than_max?
-        @height_max.nil? || @height_min == @height_max || passes_validation_with_dimensions(valid_width, @height_max - 1, 'height')
+        @height_max.nil? || @height_min == @height_max || passes_validation_with_dimensions(valid_width, @height_max - 1)
       end
 
       def height_not_larger_than_max?
-        @height_max.nil? || !passes_validation_with_dimensions(valid_width, @height_max + 1, 'height')
+        @height_max.nil? || !passes_validation_with_dimensions(valid_width, @height_max + 1)
       end
 
       def height_equals?
-        @height_min.nil? || @height_min != @height_max || passes_validation_with_dimensions(valid_width, @height_min, 'height')
+        @height_min.nil? || @height_min != @height_max || passes_validation_with_dimensions(valid_width, @height_min)
       end
 
-      def passes_validation_with_dimensions(width, height, check)
-        @subject.public_send(@attribute_name).attach attachment_for(width, height)
-
-        attachment = @subject.public_send(@attribute_name)
-        Matchers.mock_metadata(attachment, width, height) do
-          @subject.validate
-          exclude_error_message = @custom_message || "dimension_#{check}"
-          @subject.errors.details[@attribute_name].none? do |error|
-            error[:error].to_s.include?(exclude_error_message) ||
-            error[:error].to_s.include?("dimension_min") ||
-            error[:error].to_s.include?("dimension_max")
-          end
+      def passes_validation_with_dimensions(width, height)
+        mock_dimensions_for(attach_file, width, height) do
+          validate
+          is_valid? || add_failure_message_artefact(width, height)
         end
       end
 
-      def attachment_for(width, height)
-        { io: Tempfile.new('Hello world!'), filename: 'test.png', content_type: 'image/png' }
+      def add_failure_message_artefact(width, height)
+        @failure_message_artefacts << { width: width, height: height }
+        false
+      end
+
+      def is_custom_message_valid?
+        return true unless @custom_message
+
+        mock_dimensions_for(attach_file, -1, -1) do
+          validate
+          has_an_error_message_which_is_custom_message?
+        end
+      end
+
+      def mock_dimensions_for(attachment, width, height)
+        Matchers.mock_metadata(attachment, width, height) do
+          yield
+        end
+      end
+
+      def attach_file
+        @subject.public_send(@attribute_name).attach(dummy_file)
+        @subject.public_send(@attribute_name)
+      end
+
+      def dummy_file
+        {
+          io: Tempfile.new('Hello world!'),
+          filename: 'test.png',
+          content_type: 'image/png'
+        }
       end
     end
   end

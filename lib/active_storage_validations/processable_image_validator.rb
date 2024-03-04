@@ -1,10 +1,18 @@
 # frozen_string_literal: true
 
+require_relative 'concerns/errorable.rb'
+require_relative 'concerns/symbolizable.rb'
 require_relative 'metadata.rb'
 
 module ActiveStorageValidations
   class ProcessableImageValidator < ActiveModel::EachValidator # :nodoc
     include OptionProcUnfolding
+    include Errorable
+    include Symbolizable
+
+    ERROR_TYPES = %i[
+      image_not_processable
+    ].freeze
 
     if Rails.gem_version >= Gem::Version.new('6.0.0')
       def validate_each(record, attribute, _value)
@@ -16,7 +24,10 @@ module ActiveStorageValidations
         files = Array.wrap(changes.is_a?(ActiveStorage::Attached::Changes::CreateMany) ? changes.attachables : changes.attachable)
 
         files.each do |file|
-          add_error(record, attribute, :image_not_processable) unless Metadata.new(file).valid?
+          if !Metadata.new(file).valid?
+            errors_options = initialize_error_options(options, file)
+            add_error(record, attribute, ERROR_TYPES.first , **errors_options) unless Metadata.new(file).valid?
+          end
         end
       end
     else
@@ -27,17 +38,12 @@ module ActiveStorageValidations
         files = Array.wrap(record.send(attribute))
 
         files.each do |file|
-          add_error(record, attribute, :image_not_processable) unless Metadata.new(file).valid?
+          if !Metadata.new(file).valid?
+            errors_options = initialize_error_options(options, file)
+            add_error(record, attribute, ERROR_TYPES.first , **errors_options) unless Metadata.new(file).valid?
+          end
         end
       end
-    end
-
-    private
-
-    def add_error(record, attribute, default_message)
-      message = options[:message].presence || default_message
-      return if record.errors.added?(attribute, message)
-      record.errors.add(attribute, message)
     end
   end
 end
